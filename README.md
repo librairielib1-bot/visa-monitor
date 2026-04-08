@@ -1,52 +1,34 @@
-# مراقب مواعيد الفيزا الشنغن 🇪🇺
+# Visa Monitor
 
-يراقب هذا السكريبت مواعيد الفيزا الشنغن من المغرب ويرسل تنبيهاً عبر تيليغرام فور توفر موعد.
+Lightweight GitHub Actions monitor for Schengen appointment pages used from Morocco.
 
-## السفارات المدعومة
-- 🇫🇷 فرنسا — TLScontact الدار البيضاء
-- 🇪🇸 إسبانيا — BLS الدار البيضاء
-- 🇩🇪 ألمانيا — TLScontact الرباط
-- 🇮🇹 إيطاليا — VFS Global الدار البيضاء
+## What it checks
 
----
+- France: TLScontact Casablanca
+- Spain: BLS Casablanca
+- Germany: TLScontact Rabat
+- Italy: VFS Global Casablanca
 
-## النشر المجاني على Render
+## How it works
 
-### الخطوة 1 — إنشاء Bot تيليغرام
-1. افتح تيليغرام وابحث عن `@BotFather`
-2. أرسل `/newbot` واتبع التعليمات
-3. احفظ الـ **Token** (مثال: `123456789:ABC-DEF...`)
-4. ابحث عن `@userinfobot` وأرسل له أي رسالة
-5. احفظ الـ **Chat ID** (مثال: `123456789`)
+- GitHub Actions runs `monitor.py` every 15 minutes
+- the script checks each source once per workflow run
+- Telegram is used only for alerts
+- no infinite loop is used inside GitHub Actions
 
-### الخطوة 2 — رفع الكود على GitHub
-1. أنشئ حساباً على [github.com](https://github.com)
-2. أنشئ repository جديد باسم `visa-monitor`
-3. ارفع الملفات الثلاثة: `monitor.py` و `requirements.txt` و `render.yaml`
+## Required GitHub Secrets
 
-### الخطوة 3 — النشر على Render
-1. أنشئ حساباً على [render.com](https://render.com)
-2. اضغط **New → Blueprint**
-3. اربطه بـ repository الذي أنشأته
-4. في قسم **Environment Variables** أضف:
-   - `TG_TOKEN` = التوكن الخاص بك
-   - `TG_CHAT_ID` = معرف المحادثة
-   - `CHECK_INTERVAL` = `10` (كل 10 دقائق)
-5. اضغط **Deploy** — خلاص!
+- `TG_TOKEN`
+- `TG_CHAT_ID`
 
----
+## Local run
 
-## تشغيل محلي (اختياري)
 ```bash
 pip install -r requirements.txt
-TG_TOKEN="توكنك" TG_CHAT_ID="معرفك" python monitor.py
+python monitor.py
 ```
 
----
+## Notes
 
-## متغيرات البيئة
-| المتغير | الوصف | القيمة الافتراضية |
-|---------|-------|------------------|
-| `TG_TOKEN` | توكن Bot تيليغرام | مطلوب |
-| `TG_CHAT_ID` | معرف المحادثة | مطلوب |
-| `CHECK_INTERVAL` | فترة الفحص بالدقائق | 10 |
+- `BLS Spain Casablanca` public pages do not always expose live slot state clearly without the booking flow, so this source may return `unknown` instead of a misleading `available`.
+- API behavior can change over time. When an API fails, the script falls back to HTML inspection when possible.

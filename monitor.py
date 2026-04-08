@@ -1,14 +1,17 @@
-import os
-import time
+from __future__ import annotations
+
+import json
 import logging
+import os
+from dataclasses import dataclass
+from typing import Any
+
 import requests
-from datetime import datetime
 
-# ─── إعدادات تيليغرام
-TG_TOKEN   = os.environ.get("TG_TOKEN", "")
-TG_CHAT_ID = os.environ.get("TG_CHAT_ID", "")
 
-CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "15"))
+TG_TOKEN = os.environ.get("TG_TOKEN", "").strip()
+TG_CHAT_ID = os.environ.get("TG_CHAT_ID", "").strip()
+REQUEST_TIMEOUT_SECONDS = int(os.environ.get("REQUEST_TIMEOUT_SECONDS", "25"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,172 +30,228 @@ HEADERS = {
     "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8,ar;q=0.7",
 }
 
-EMBASSIES = [
-    {
-        "id": "france_tls",
-        "name": "U0001f1ebU0001f1f7 فرنسا — TLScontact الدار البيضاء",
-        "url": "https://ma.tlscontact.com/fr/CAS/index.php",
-        "api_url": "https://ma.tlscontact.com/fr/CAS/rdv/api/slots?country=MA&city=CAS",
-        "mode": "api",
-        "fallback_url": "https://ma.tlscontact.com/fr/CAS/index.php",
-        "positive_keywords": ["disponible", "slot", "créneau", "rdv"],
-        "negative_keywords": ["aucun", "no slot", "complet", "indisponible"],
-    },
-    {
-        "id": "spain_bls",
-        "name": "U0001f1eaU0001f1f8 إسبانيا — BLS الدار البيضاء",
-        "url": "https://blsspainmorocco.com/casablanca/arabic/",
-        "api_url": None,
-        "mode": "scrape",
-        "fallback_url": "https://blsspainmorocco.com/casablanca/arabic/",
-        "positive_keywords": ["appointment", "موعد", "disponible", "slot", "available"],
-        "negative_keywords": ["لا يوجد", "no appointment", "not available"],
-    },
-    {
-        "id": "germany_tls",
-        "name": "U0001f1e9U0001f1ea ألمانيا — TLScontact الرباط",
-        "url": "https://ma.tlscontact.com/de/RBA/index.php",
-        "api_url": "https://ma.tlscontact.com/de/RBA/rdv/api/slots?country=MA&city=RBA",
-        "mode": "api",
-        "fallback_url": "https://ma.tlscontact.com/de/RBA/index.php",
-        "positive_keywords": ["disponible", "slot", "créneau", "termin", "appointment"],
-        "negative_keywords": ["aucun", "no slot", "complet", "indisponible"],
-    },
-    {
-        "id": "italy_vfs",
-        "name": "U0001f1eeU0001f1f9 إيطاليا — VFS Global الدار البيضاء",
-        "url": "https://visa.vfsglobal.com/mar/ar/ita/",
-        "api_url": "https://visa.vfsglobal.com/api/appointment/slots?country=mar&mission=ita",
-        "mode": "api",
-        "fallback_url": "https://visa.vfsglobal.com/mar/ar/ita/",
-        "positive_keywords": ["appointment", "موعد", "available", "slot"],
-        "negative_keywords": ["no appointment", "not available", "لا يوجد"],
-    },
-]
 
-last_state: dict[str, bool] = {e["id"]: False for e in EMBASSIES}
+@dataclass(frozen=True)
+class Embassy:
+    id: str
+    name: str
+    url: str
+    method: str
+    api_url: str | None = None
+    fallback_url: str | None = None
+    positive_keywords: tuple[str, ...] = ()
+    negative_keywords: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CheckResult:
+    embassy: Embassy
+    status: str
+    detail: str
+
+
+EMBASSIES: tuple[Embassy, ...] = (
+    Embassy(
+        id="france_tls",
+        name="France - TLScontact Casablanca",
+        url="https://ma.tlscontact.com/fr/CAS/index.php",
+        method="json-api",
+        api_url="https://ma.tlscontact.com/fr/CAS/rdv/api/slots?country=MA&city=CAS",
+        fallback_url="https://ma.tlscontact.com/fr/CAS/index.php",
+        positive_keywords=("slot available", "available", "creaneau", "creneau", "disponible"),
+        negative_keywords=("aucun", "no slot", "complet", "indisponible"),
+    ),
+    Embassy(
+        id="spain_bls",
+        name="Spain - BLS Casablanca",
+        url="https://blsspainmorocco.com/casablanca/",
+        method="html-scrape",
+        fallback_url="https://blsspainmorocco.com/casablanca/",
+        positive_keywords=("slot available", "slots available", "appointment available", "choose date", "select date"),
+        negative_keywords=(
+            "no appointment slots are currently available",
+            "no appointments available",
+            "all appointments are booked",
+            "fully booked",
+            "aucun rendez-vous",
+            "pas de rendez-vous disponible",
+            "complet",
+        ),
+    ),
+    Embassy(
+        id="germany_tls",
+        name="Germany - TLScontact Rabat",
+        url="https://ma.tlscontact.com/de/RBA/index.php",
+        method="json-api",
+        api_url="https://ma.tlscontact.com/de/RBA/rdv/api/slots?country=MA&city=RBA",
+        fallback_url="https://ma.tlscontact.com/de/RBA/index.php",
+        positive_keywords=("slot available", "available", "termin", "creneau", "disponible"),
+        negative_keywords=("aucun", "no slot", "complet", "indisponible"),
+    ),
+    Embassy(
+        id="italy_vfs",
+        name="Italy - VFS Global Casablanca",
+        url="https://visa.vfsglobal.com/mar/ar/ita/",
+        method="json-api",
+        api_url="https://visa.vfsglobal.com/api/appointment/slots?country=mar&mission=ita",
+        fallback_url="https://visa.vfsglobal.com/mar/ar/ita/",
+        positive_keywords=("slot available", "slots available", "available appointments", "select date"),
+        negative_keywords=("no appointment", "not available", "fully booked", "complet", "no slots"),
+    ),
+)
 
 
 def send_telegram(message: str) -> bool:
     if not TG_TOKEN or not TG_CHAT_ID:
-        log.warning("تيليغرام غير مُعدّ — تخطي الإشعار")
+        log.warning("Telegram is not configured. Skipping notification.")
         return False
-    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+
     try:
-        r = requests.post(
-            url,
-            json={"chat_id": TG_CHAT_ID, "text": message, "parse_mode": "HTML"},
+        response = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json={"chat_id": TG_CHAT_ID, "text": message},
             timeout=10,
         )
-        if r.status_code == 200:
-            log.info("تم إرسال تنبيه تيليغرام بنجاح")
-            return True
-        log.error(f"خطأ تيليغرام {r.status_code}: {r.text[:200]}")
-    except Exception as e:
-        log.error(f"فشل إرسال تيليغرام: {e}")
-    return False
-
-
-def _parse_content(content: str, positive_kw: list, negative_kw: list) -> bool:
-    lower = content.lower()
-    for neg in negative_kw:
-        if neg.lower() in lower:
-            return False
-    for pos in positive_kw:
-        if pos.lower() in lower:
-            return True
-    return False
-
-
-def check_embassy_api(embassy: dict):
-    api_url = embassy.get("api_url")
-    if not api_url:
-        return None
-    try:
-        r = requests.get(api_url, headers=HEADERS, timeout=15)
-        if r.status_code == 200:
-            result = _parse_content(r.text, embassy["positive_keywords"], embassy["negative_keywords"])
-            log.debug(f"[API] {embassy[\'name\']} -> {r.text[:120]}")
-            return result
-        elif r.status_code in (403, 401, 429):
-            log.warning(f"[API] {embassy[\'name\']} محجوب ({r.status_code}) -> fallback")
-            return None
-        else:
-            log.warning(f"[API] {embassy[\'name\']} status {r.status_code} -> fallback")
-            return None
-    except Exception as e:
-        log.warning(f"[API] {embassy[\'name\']} خطأ: {e} -> fallback")
-        return None
-
-
-def check_embassy_scrape(embassy: dict, use_fallback: bool = False) -> bool:
-    url = embassy["fallback_url"] if use_fallback else embassy["url"]
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        if r.status_code != 200:
-            log.warning(f"[Scrape] {embassy[\'name\']} status {r.status_code} — تخطي")
-            return False
-        return _parse_content(r.text, embassy["positive_keywords"], embassy["negative_keywords"])
-    except Exception as e:
-        log.error(f"[Scrape] خطأ في فحص {embassy[\'name\']}: {e}")
+        response.raise_for_status()
+        return True
+    except Exception as exc:
+        log.error("Telegram send failed: %s", exc)
         return False
 
 
-def check_embassy(embassy: dict) -> bool:
-    if embassy["mode"] == "api":
-        result = check_embassy_api(embassy)
-        if result is not None:
-            return result
-        log.info(f"[Fallback] {embassy[\'name\']} -> scraping")
-        return check_embassy_scrape(embassy, use_fallback=True)
-    else:
-        return check_embassy_scrape(embassy)
+def normalize_text(value: str) -> str:
+    return " ".join((value or "").lower().split())
 
 
-def run_check():
-    log.info("=" * 55)
-    log.info(f"بدء دورة الفحص — {datetime.now().strftime(\'%Y-%m-%d %H:%M:%S\'  )}")
-    for emb in EMBASSIES:
-        available = check_embassy(emb)
-        prev = last_state[emb["id"]]
+def parse_text_result(text: str, embassy: Embassy) -> CheckResult:
+    normalized = normalize_text(text)
 
-        if available and not prev:
-            msg = (
-                f"U0001f6a8 <b>موعد فيزا متاح!</b>\n\n"
-                f"السفارة: {emb[\'name\']}\n"
-                f"الرابط: {emb[\'url\']}\n\n"
-                f"⚡ تصرف بسرعة قبل أن يُحجز!"
-            )
-            send_telegram(msg)
-            log.info(f"✅ موعد متاح — {emb[\'name\']}")
-        elif not available and prev:
-            log.info(f"❌ اختفى الموعد — {emb[\'name\']}")
-            send_telegram(f"ℹ️ اختفى الموعد في {emb[\'name\']} — استمرار المراقبة.")
-        else:
-            status = "متاح" if available else "غير متاح"
-            log.info(f"{✅ if available else ⏳} {emb[\'name\']} — {status}")
+    for keyword in embassy.negative_keywords:
+        if keyword in normalized:
+            return CheckResult(embassy, "unavailable", f"keyword:{keyword}")
 
-        last_state[emb["id"]] = available
+    for keyword in embassy.positive_keywords:
+        if keyword in normalized:
+            return CheckResult(embassy, "available", f"keyword:{keyword}")
 
-    log.info(f"انتظار {CHECK_INTERVAL} دقيقة للفحص القادم...")
+    return CheckResult(embassy, "unknown", "no_signal")
 
 
-def main():
-    log.info("U0001f680 بدء مراقبة مواعيد الفيزا — v2")
-    log.info(f"السفارات: {len(EMBASSIES)} | الفترة: {CHECK_INTERVAL} دقيقة")
-    if TG_TOKEN and TG_CHAT_ID:
-        send_telegram(
-            "✅ <b>بدأت مراقبة مواعيد الفيزا (v2)</b>\n\n"
-            "يستخدم API مباشر + fallback ذكي.\n"
-            "سيصلك إشعار فور ظهور موعد."
-        )
-        log.info("تيليغرام مفعّل")
-    else:
-        log.warning("تيليغرام غير مُعدّ — سيعمل بدون إشعارات")
-    while True:
-        run_check()
-        time.sleep(CHECK_INTERVAL * 60)
+def extract_json_slots(payload: Any) -> bool | None:
+    if isinstance(payload, dict):
+        for key in ("slots", "availableSlots", "available_dates", "availableDates", "data"):
+            if key in payload:
+                value = payload[key]
+                if isinstance(value, list):
+                    return len(value) > 0
+                if isinstance(value, dict):
+                    return len(value) > 0
+        for value in payload.values():
+            nested = extract_json_slots(value)
+            if nested is not None:
+                return nested
+    if isinstance(payload, list):
+        return len(payload) > 0
+    return None
+
+
+def fetch_json(session: requests.Session, url: str) -> Any:
+    response = session.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT_SECONDS)
+    response.raise_for_status()
+    return response.json()
+
+
+def fetch_text(session: requests.Session, url: str) -> str:
+    response = session.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT_SECONDS)
+    response.raise_for_status()
+    return response.text
+
+
+def check_json_api(session: requests.Session, embassy: Embassy) -> CheckResult:
+    if not embassy.api_url:
+        return CheckResult(embassy, "error", "missing_api_url")
+
+    try:
+        payload = fetch_json(session, embassy.api_url)
+        slots = extract_json_slots(payload)
+        if slots is True:
+            return CheckResult(embassy, "available", "api_slots_present")
+        if slots is False:
+            return CheckResult(embassy, "unavailable", "api_slots_empty")
+        return parse_text_result(json.dumps(payload, ensure_ascii=False), embassy)
+    except Exception as exc:
+        log.warning("%s API failed: %s", embassy.name, exc)
+        if embassy.fallback_url:
+            return check_html_scrape(session, embassy, embassy.fallback_url, detail_prefix="fallback")
+        return CheckResult(embassy, "error", f"api_error:{type(exc).__name__}")
+
+
+def check_html_scrape(
+    session: requests.Session,
+    embassy: Embassy,
+    url: str | None = None,
+    detail_prefix: str = "scrape",
+) -> CheckResult:
+    target_url = url or embassy.url
+    try:
+        text = fetch_text(session, target_url)
+        result = parse_text_result(text, embassy)
+        if embassy.id == "spain_bls" and result.status == "unknown":
+            return CheckResult(embassy, "unknown", "public_page_has_no_live_slot_signal")
+        return CheckResult(embassy, result.status, f"{detail_prefix}:{result.detail}")
+    except Exception as exc:
+        return CheckResult(embassy, "error", f"{detail_prefix}_error:{type(exc).__name__}")
+
+
+def check_embassy(session: requests.Session, embassy: Embassy) -> CheckResult:
+    if embassy.method == "json-api":
+        return check_json_api(session, embassy)
+    return check_html_scrape(session, embassy)
+
+
+def format_result_line(result: CheckResult) -> str:
+    return f"- {result.embassy.name}: {result.status} ({result.detail})"
+
+
+def build_telegram_message(results: list[CheckResult]) -> str:
+    available = [r for r in results if r.status == "available"]
+    if available:
+        lines = ["Visa monitor alert", ""]
+        for result in available:
+            lines.append(f"{result.embassy.name}")
+            lines.append(result.embassy.url)
+            lines.append(f"detail: {result.detail}")
+            lines.append("")
+        return "\n".join(lines).strip()
+
+    errors = [r for r in results if r.status == "error"]
+    if errors:
+        lines = ["Visa monitor warning", ""]
+        lines.extend(format_result_line(result) for result in errors)
+        return "\n".join(lines)
+
+    return ""
+
+
+def main() -> int:
+    session = requests.Session()
+    results: list[CheckResult] = []
+
+    for embassy in EMBASSIES:
+        result = check_embassy(session, embassy)
+        results.append(result)
+        log.info("%s -> %s | %s", embassy.name, result.status, result.detail)
+
+    message = build_telegram_message(results)
+    if message:
+        send_telegram(message)
+
+    available_count = sum(1 for result in results if result.status == "available")
+    error_count = sum(1 for result in results if result.status == "error")
+
+    log.info("Run finished. available=%s error=%s total=%s", available_count, error_count, len(results))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
