@@ -24,5 +24,5 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python monitor.py
         env:
-          TG_TOKEN: ${{ secrets.TG_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TG_TOKEN: ${{ 8637032817:AAF_6yxAy4PtAk5gx4tZTarUR3vU9aKMCO0 }}
+          TG_CHAT_ID: ${{ 8286527092 }}
