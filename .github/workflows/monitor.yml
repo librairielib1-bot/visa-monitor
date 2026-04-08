@@ -25,4 +25,4 @@ jobs:
       - run: python monitor.py
         env:
           TG_TOKEN: ${{ 8637032817:AAF_6yxAy4PtAk5gx4tZTarUR3vU9aKMCO0 }}
-          TG_CHAT_ID: ${{ 8286527092 }}
+          TG_CHAT_ID: ${{ "id":8286527092}}
