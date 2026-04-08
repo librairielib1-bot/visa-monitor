@@ -215,22 +215,22 @@ def format_result_line(result: CheckResult) -> str:
 
 def build_telegram_message(results: list[CheckResult]) -> str:
     available = [r for r in results if r.status == "available"]
-    if available:
-        lines = ["Visa monitor alert", ""]
-        for result in available:
-            lines.append(f"{result.embassy.name}")
-            lines.append(result.embassy.url)
-            lines.append(f"detail: {result.detail}")
-            lines.append("")
-        return "\n".join(lines).strip()
-
     errors = [r for r in results if r.status == "error"]
-    if errors:
-        lines = ["Visa monitor warning", ""]
-        lines.extend(format_result_line(result) for result in errors)
-        return "\n".join(lines)
+    unknown = [r for r in results if r.status == "unknown"]
+    unavailable = [r for r in results if r.status == "unavailable"]
 
-    return ""
+    lines = ["Visa monitor summary", ""]
+    lines.append(f"available={len(available)} unavailable={len(unavailable)} unknown={len(unknown)} error={len(errors)}")
+    lines.append("")
+    lines.extend(format_result_line(result) for result in results)
+
+    if available:
+        lines.append("")
+        lines.append("Available links:")
+        for result in available:
+            lines.append(result.embassy.url)
+
+    return "\n".join(lines)
 
 
 def main() -> int:
